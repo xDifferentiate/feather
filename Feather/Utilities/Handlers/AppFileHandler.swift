@@ -39,21 +39,35 @@ final class AppFileHandler: NSObject, @unchecked Sendable {
 	func copy() async throws {
 		try _fileManager.createDirectoryIfNeeded(at: _uniqueWorkDir)
 		
-		let destinationURL = _uniqueWorkDir.appendingPathComponent(_ipa.lastPathComponent)
+		// Normalise the extension (e.g. "App.IPA") so the unzipper recognises it.
+		let destinationURL = _uniqueWorkDir
+			.appendingPathComponent(_ipa.deletingPathExtension().lastPathComponent)
+			.appendingPathExtension(_ipa.pathExtension.lowercased())
 
 		try _fileManager.removeFileIfNeeded(at: destinationURL)
-		
-		try _fileManager.copyItem(at: _ipa, to: destinationURL)
+
+		// Coordinate the read so files that live in iCloud Drive or another app's
+		// file provider are materialised on disk before we try to copy them.
+		var coordinatorError: NSError?
+		var copyError: Error?
+		NSFileCoordinator().coordinate(readingItemAt: _ipa, options: [], error: &coordinatorError) { readURL in
+			do {
+				try _fileManager.copyItem(at: readURL, to: destinationURL)
+			} catch {
+				copyError = error
+			}
+		}
+
+		if let error = copyError ?? coordinatorError {
+			throw error
+		}
+
 		_ipa = destinationURL
 	}
-	
+
 	func extract() async throws {
-		if _ipa.pathExtension == "ipa" {
-			Zip.addCustomFileExtension("ipa")
-		}
-		if _ipa.pathExtension == "tipa" {
-			Zip.addCustomFileExtension("tipa")
-		}
+		Zip.addCustomFileExtension("ipa")
+		Zip.addCustomFileExtension("tipa")
 		
 		let download = self._download
 		
@@ -113,14 +127,32 @@ final class AppFileHandler: NSObject, @unchecked Sendable {
 		}
 		
 		let bundle = Bundle(url: appUrl)
-		
+
+		// `Storage.shared.context` is the main-queue view context. Inserting into it
+		// from this detached task is a Core Data threading violation and is why
+		// imported apps sometimes never showed up in the Library until relaunch.
+		await _insertIntoDatabase(
+			name: bundle?.name,
+			identifier: bundle?.bundleIdentifier,
+			version: bundle?.version,
+			icon: bundle?.iconFileName
+		)
+	}
+
+	@MainActor
+	private func _insertIntoDatabase(
+		name: String?,
+		identifier: String?,
+		version: String?,
+		icon: String?
+	) {
 		Storage.shared.addImported(
 			uuid: _uuid,
 			source: _sourceProvenance?.sourceRepositoryURL,
-			appName: bundle?.name,
-			appIdentifier: bundle?.bundleIdentifier,
-			appVersion: bundle?.version,
-			appIcon: bundle?.iconFileName
+			appName: name,
+			appIdentifier: identifier,
+			appVersion: version,
+			appIcon: icon
 		) { _ in }
 		
 		if let sourceProvenance = _sourceProvenance {

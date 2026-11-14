@@ -137,14 +137,37 @@ struct FeatherApp: App {
 				)
 			}
 		} else {
-			if url.pathExtension == "ipa" || url.pathExtension == "tipa" {
-				if FileManager.default.isFileFromFileProvider(at: url) {
-					guard url.startAccessingSecurityScopedResource() else { return }
-					FR.handlePackageFile(url) { _ in }
-				} else {
-					FR.handlePackageFile(url) { _ in }
+			let pathExtension = url.pathExtension.lowercased()
+
+			if url.isFileURL, pathExtension == "ipa" || pathExtension == "tipa" {
+				// Files shared from other apps, iCloud Drive, or "On My iPhone" are opened
+				// in place and arrive as security-scoped URLs. We must always try to gain
+				// access (not only for file providers) and keep it until the copy is done.
+				let didStartAccessing = url.startAccessingSecurityScopedResource()
+				let generator = UINotificationFeedbackGenerator()
+				generator.prepare()
+
+				FR.handlePackageFile(url) { error in
+					if didStartAccessing {
+						url.stopAccessingSecurityScopedResource()
+					}
+
+					// Remove the copy iOS places in Documents/Inbox when not opened in place.
+					if url.path.contains("/Documents/Inbox/") {
+						try? FileManager.default.removeItem(at: url)
+					}
+
+					if let error {
+						generator.notificationOccurred(.error)
+						UIAlertController.showAlertWithOk(
+							title: .localized("Error"),
+							message: error.localizedDescription
+						)
+					} else {
+						generator.notificationOccurred(.success)
+					}
 				}
-				
+
 				return
 			}
 		}
