@@ -1,9 +1,6 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - 'claude/**'
   pull_request:
   workflow_dispatch:
 
@@ -13,10 +10,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Xcode 26.3's xcodebuild crashes while registering Swift package
-        # dependencies for this project (IDESwiftPackageCore
-        # DependencyPackagesGroup.sortedInsert), so try other 26.x versions too.
-        xcode: ['26.3', '26.2', '26.1', '26.0']
+        # 26.0/26.1 are installed on macos-latest without their iOS platforms.
+        xcode: ['26.3', '26.2']
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
