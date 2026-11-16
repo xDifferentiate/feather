@@ -62,6 +62,12 @@ struct FeatherApp: App {
 	
 	private func _handleURL(_ url: URL) {
 		if url.scheme == "feather" {
+			/// feather://import-shared — sent by the "Share to Feather" extension after it
+			/// copied the shared files into the App Group inbox.
+			if url.host == "import-shared" {
+				_importInboxPackages()
+				return
+			}
 			/// feather://import-certificate?p12=<base64>&mobileprovision=<base64>&password=<base64>
 			if url.host == "import-certificate" {
 				guard
@@ -158,19 +164,25 @@ struct FeatherApp: App {
 		URL.documentsDirectory.appendingPathComponent("Inbox", isDirectory: true)
 	}
 	
-	/// Imports any `.ipa`/`.tipa` iOS has dropped into Documents/Inbox ("Open with Feather",
-	/// share sheet "Feather", AirDrop, Files app).
+	/// Imports any `.ipa`/`.tipa` waiting in Documents/Inbox (put there by iOS for
+	/// "Open with Feather", the share sheet's app row, AirDrop and the Files app) or in the
+	/// App Group inbox (put there by the "Share to Feather" extension).
 	private func _importInboxPackages() {
-		guard let files = try? FileManager.default.contentsOfDirectory(
-			at: _inboxDirectory,
-			includingPropertiesForKeys: nil,
-			options: [.skipsHiddenFiles]
-		) else {
-			return
-		}
+		let fileManager = FileManager.default
+		let inboxes = [_inboxDirectory, SharedInbox.directory()].compactMap { $0 }
 		
-		for file in files where _isPackageFile(file) {
-			_importOpenedPackage(file, reportUnsupported: false)
+		for inbox in inboxes {
+			guard let files = try? fileManager.contentsOfDirectory(
+				at: inbox,
+				includingPropertiesForKeys: nil,
+				options: [.skipsHiddenFiles]
+			) else {
+				continue
+			}
+			
+			for file in files where _isPackageFile(file) {
+				_importOpenedPackage(file, reportUnsupported: false, consumesSource: true)
+			}
 		}
 	}
 	
@@ -182,9 +194,14 @@ struct FeatherApp: App {
 	/// Documents/Inbox. We still take security-scoped access in case a URL points elsewhere
 	/// (e.g. macOS "Open With"), copy it into our temporary directory, then run the exact same
 	/// import, which shows progress in the header and adds it to the Library.
-	private func _importOpenedPackage(_ url: URL, reportUnsupported: Bool = true) {
+	private func _importOpenedPackage(
+		_ url: URL,
+		reportUnsupported: Bool = true,
+		consumesSource: Bool = false
+	) {
 		let fileManager = FileManager.default
-		let isInboxFile = url.standardizedFileURL.path.hasPrefix(_inboxDirectory.standardizedFileURL.path)
+		let isInboxFile = consumesSource
+			|| url.standardizedFileURL.path.hasPrefix(_inboxDirectory.standardizedFileURL.path)
 			|| url.path.contains("/Documents/Inbox/")
 		
 		// Already picked up by the Inbox scan (or the open event) and removed.
