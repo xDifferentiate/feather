@@ -124,8 +124,6 @@
 	</array>
 	<key>FeatherAppGroupIdentifier</key>
 	<string>group.thewonderofyou.Feather</string>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>localdevvpn</string>
