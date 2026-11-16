@@ -20,6 +20,8 @@ struct FeatherApp: App {
 	@StateObject var downloadManager = DownloadManager.shared
 	let storage = Storage.shared
 	
+	@Environment(\.scenePhase) private var _scenePhase
+	
 	var body: some Scene {
 		WindowGroup {
 			VStack {
@@ -46,6 +48,14 @@ struct FeatherApp: App {
 				}
 				
 				UIApplication.topViewController()?.view.window?.tintColor = UIColor(Color(hex: UserDefaults.standard.string(forKey: "Feather.userTintColor") ?? "#848ef9"))
+			}
+			// iOS copies files opened with Feather into Documents/Inbox before launching us.
+			// Pick them up whenever we become active, so an import still happens even if the
+			// open URL event is never delivered (seen with some sideloaded installs).
+			.onChange(of: _scenePhase) { phase in
+				if phase == .active {
+					_importInboxPackages()
+				}
 			}
 		}
 	}
@@ -144,14 +154,44 @@ struct FeatherApp: App {
 		}
 	}
 	
+	private var _inboxDirectory: URL {
+		URL.documentsDirectory.appendingPathComponent("Inbox", isDirectory: true)
+	}
+	
+	/// Imports any `.ipa`/`.tipa` iOS has dropped into Documents/Inbox ("Open with Feather",
+	/// share sheet "Feather", AirDrop, Files app).
+	private func _importInboxPackages() {
+		guard let files = try? FileManager.default.contentsOfDirectory(
+			at: _inboxDirectory,
+			includingPropertiesForKeys: nil,
+			options: [.skipsHiddenFiles]
+		) else {
+			return
+		}
+		
+		for file in files where _isPackageFile(file) {
+			_importOpenedPackage(file, reportUnsupported: false)
+		}
+	}
+	
 	/// Handles "Open with Feather" / share sheet / Files app opens of `.ipa` and `.tipa` files.
 	///
 	/// Mirrors Library → Import from Files: the file picker hands us a private copy
 	/// (`asCopy: true`) which is then imported through `DownloadManager.importPackageFiles`.
-	/// Files opened from other apps arrive in place as security-scoped URLs, so we take
-	/// the same steps: copy the file into our own container while we hold access, then
-	/// run the exact same import, which shows progress in the header and adds it to the Library.
-	private func _importOpenedPackage(_ url: URL) {
+	/// With `LSSupportsOpeningDocumentsInPlace` off, iOS gives us such a copy in
+	/// Documents/Inbox. We still take security-scoped access in case a URL points elsewhere
+	/// (e.g. macOS "Open With"), copy it into our temporary directory, then run the exact same
+	/// import, which shows progress in the header and adds it to the Library.
+	private func _importOpenedPackage(_ url: URL, reportUnsupported: Bool = true) {
+		let fileManager = FileManager.default
+		let isInboxFile = url.standardizedFileURL.path.hasPrefix(_inboxDirectory.standardizedFileURL.path)
+			|| url.path.contains("/Documents/Inbox/")
+		
+		// Already picked up by the Inbox scan (or the open event) and removed.
+		if isInboxFile && !fileManager.fileExists(atPath: url.path) {
+			return
+		}
+		
 		let didStartAccessing = url.startAccessingSecurityScopedResource()
 		defer {
 			if didStartAccessing {
@@ -159,17 +199,25 @@ struct FeatherApp: App {
 			}
 		}
 		
-		guard _isPackageFile(url) else { return }
+		guard _isPackageFile(url) else {
+			if reportUnsupported {
+				UINotificationFeedbackGenerator().notificationOccurred(.error)
+				UIAlertController.showAlertWithOk(
+					title: .localized("Error"),
+					message: "Feather can't import \"\(url.lastPathComponent)\". Only .ipa and .tipa files are supported."
+				)
+			}
+			return
+		}
 		
-		let fileManager = FileManager.default
 		let copyDirectory = fileManager.temporaryDirectory
 			.appendingPathComponent("FeatherOpenIn_\(UUID().uuidString)", isDirectory: true)
 		
 		do {
 			let localURL = try _copyOpenedFile(url, into: copyDirectory)
 			
-			// iOS leaves a copy in Documents/Inbox when the file isn't opened in place.
-			if url.path.contains("/Documents/Inbox/") {
+			// The Inbox copy is ours; remove it so it isn't imported twice.
+			if isInboxFile {
 				try? fileManager.removeItem(at: url)
 			}
 			
