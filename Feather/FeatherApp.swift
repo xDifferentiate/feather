@@ -9,6 +9,7 @@ import SwiftUI
 import Nuke
 import IDeviceSwift
 import OSLog
+import UniformTypeIdentifiers
 
 @main
 struct FeatherApp: App {
@@ -137,40 +138,103 @@ struct FeatherApp: App {
 				)
 			}
 		} else {
-			let pathExtension = url.pathExtension.lowercased()
-
-			if url.isFileURL, pathExtension == "ipa" || pathExtension == "tipa" {
-				// Files shared from other apps, iCloud Drive, or "On My iPhone" are opened
-				// in place and arrive as security-scoped URLs. We must always try to gain
-				// access (not only for file providers) and keep it until the copy is done.
-				let didStartAccessing = url.startAccessingSecurityScopedResource()
-				let generator = UINotificationFeedbackGenerator()
-				generator.prepare()
-
-				FR.handlePackageFile(url) { error in
-					if didStartAccessing {
-						url.stopAccessingSecurityScopedResource()
-					}
-
-					// Remove the copy iOS places in Documents/Inbox when not opened in place.
-					if url.path.contains("/Documents/Inbox/") {
-						try? FileManager.default.removeItem(at: url)
-					}
-
-					if let error {
-						generator.notificationOccurred(.error)
-						UIAlertController.showAlertWithOk(
-							title: .localized("Error"),
-							message: error.localizedDescription
-						)
-					} else {
-						generator.notificationOccurred(.success)
-					}
-				}
-
-				return
+			if url.isFileURL {
+				_importOpenedPackage(url)
 			}
 		}
+	}
+	
+	/// Handles "Open with Feather" / share sheet / Files app opens of `.ipa` and `.tipa` files.
+	///
+	/// Mirrors Library → Import from Files: the file picker hands us a private copy
+	/// (`asCopy: true`) which is then imported through `DownloadManager.importPackageFiles`.
+	/// Files opened from other apps arrive in place as security-scoped URLs, so we take
+	/// the same steps: copy the file into our own container while we hold access, then
+	/// run the exact same import, which shows progress in the header and adds it to the Library.
+	private func _importOpenedPackage(_ url: URL) {
+		let didStartAccessing = url.startAccessingSecurityScopedResource()
+		defer {
+			if didStartAccessing {
+				url.stopAccessingSecurityScopedResource()
+			}
+		}
+		
+		guard _isPackageFile(url) else { return }
+		
+		let fileManager = FileManager.default
+		let copyDirectory = fileManager.temporaryDirectory
+			.appendingPathComponent("FeatherOpenIn_\(UUID().uuidString)", isDirectory: true)
+		
+		do {
+			let localURL = try _copyOpenedFile(url, into: copyDirectory)
+			
+			// iOS leaves a copy in Documents/Inbox when the file isn't opened in place.
+			if url.path.contains("/Documents/Inbox/") {
+				try? fileManager.removeItem(at: url)
+			}
+			
+			DownloadManager.shared.importPackageFiles([localURL]) { _, error in
+				try? fileManager.removeItem(at: copyDirectory)
+				
+				if error == nil {
+					UINotificationFeedbackGenerator().notificationOccurred(.success)
+				}
+			}
+		} catch {
+			try? fileManager.removeItem(at: copyDirectory)
+			UINotificationFeedbackGenerator().notificationOccurred(.error)
+			UIAlertController.showAlertWithOk(
+				title: .localized("Error"),
+				message: error.localizedDescription
+			)
+		}
+	}
+	
+	private func _isPackageFile(_ url: URL) -> Bool {
+		let pathExtension = url.pathExtension.lowercased()
+		if pathExtension == "ipa" || pathExtension == "tipa" {
+			return true
+		}
+		
+		guard let contentType = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType else {
+			return false
+		}
+		
+		return [UTType.ipa, UTType.tipa, UTType("com.apple.itunes.ipa")]
+			.compactMap { $0 }
+			.contains { contentType.conforms(to: $0) }
+	}
+	
+	/// Copies an opened file into our temporary directory, coordinating the read so files
+	/// in iCloud Drive or another app's file provider are downloaded first.
+	private func _copyOpenedFile(_ url: URL, into directory: URL) throws -> URL {
+		let fileManager = FileManager.default
+		try fileManager.createDirectoryIfNeeded(at: directory)
+		
+		var pathExtension = url.pathExtension.lowercased()
+		if pathExtension != "ipa" && pathExtension != "tipa" {
+			pathExtension = "ipa"
+		}
+		
+		let destinationURL = directory
+			.appendingPathComponent(url.deletingPathExtension().lastPathComponent)
+			.appendingPathExtension(pathExtension)
+		
+		var coordinatorError: NSError?
+		var copyError: Error?
+		NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinatorError) { readURL in
+			do {
+				try fileManager.copyItem(at: readURL, to: destinationURL)
+			} catch {
+				copyError = error
+			}
+		}
+		
+		if let error = copyError ?? coordinatorError {
+			throw error
+		}
+		
+		return destinationURL
 	}
 }
 

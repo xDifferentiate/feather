@@ -9,6 +9,7 @@ import Foundation
 import Combine
 import UIKit.UIImpactFeedbackGenerator
 import BackgroundTasks
+import NimbleExtensions
 
 class Download: Identifiable, @unchecked Sendable {
 	@Published var progress: Double = 0.0
@@ -175,13 +176,37 @@ class DownloadManager: NSObject, ObservableObject {
 
 extension DownloadManager: URLSessionDownloadDelegate {
 	
-	func handlePachageFile(url: URL, dl: Download) throws {
+	/// Imports local `.ipa`/`.tipa` files exactly like Library → Import from Files does:
+	/// each file gets an archive entry (shown in the download header with unpack progress)
+	/// and is then copied, extracted and added to the Library.
+	///
+	/// The URLs must already be readable by Feather (e.g. a copy in our own container).
+	func importPackageFiles(_ urls: [URL], completion: ((URL, Error?) -> Void)? = nil) {
+		for url in urls {
+			let id = "FeatherManualDownload_\(UUID().uuidString)"
+			let dl = startArchive(from: url, id: id)
+			try? handlePachageFile(url: url, dl: dl) { error in
+				completion?(url, error)
+			}
+		}
+	}
+
+	func handlePachageFile(url: URL, dl: Download, completion: ((Error?) -> Void)? = nil) throws {
 		FR.handlePackageFile(url, download: dl) { err in
-			if err != nil {
+			if let err {
 				let generator = UINotificationFeedbackGenerator()
 				generator.notificationOccurred(.error)
+
+				if dl.onlyArchiving {
+					UIAlertController.showAlertWithOk(
+						title: .localized("Error"),
+						message: err.localizedDescription
+					)
+				}
 			}
-			
+
+			completion?(err)
+
 			DispatchQueue.main.async {
 				if let index = DownloadManager.shared.getDownloadIndex(by: dl.id) {
 					DownloadManager.shared.downloads.remove(at: index)
