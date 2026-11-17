@@ -190,10 +190,10 @@ struct FeatherApp: App {
 	///
 	/// Mirrors Library → Import from Files: the file picker hands us a private copy
 	/// (`asCopy: true`) which is then imported through `DownloadManager.importPackageFiles`.
-	/// With `LSSupportsOpeningDocumentsInPlace` off, iOS gives us such a copy in
-	/// Documents/Inbox. We still take security-scoped access in case a URL points elsewhere
-	/// (e.g. macOS "Open With"), copy it into our temporary directory, then run the exact same
-	/// import, which shows progress in the header and adds it to the Library.
+	/// Files opened in place arrive as security-scoped URLs (some senders instead put a copy
+	/// in Documents/Inbox), so we take security-scoped access, copy the file into our temporary
+	/// directory, then run the exact same import, which shows progress in the header and adds
+	/// it to the Library.
 	private func _importOpenedPackage(
 		_ url: URL,
 		reportUnsupported: Bool = true,
