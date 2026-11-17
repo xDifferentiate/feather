@@ -238,6 +238,8 @@ struct FeatherApp: App {
 				try? fileManager.removeItem(at: url)
 			}
 			
+			NotificationCenter.default.post(name: .featherShowLibrary, object: nil)
+			
 			DownloadManager.shared.importPackageFiles([localURL]) { _, error in
 				try? fileManager.removeItem(at: copyDirectory)
 				
