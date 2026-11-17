@@ -16,6 +16,11 @@ struct ExtendedTabbarView: View {
 	@StateObject var viewModel = SourcesViewModel.shared
 	
 	@State private var _isAddingPresenting = false
+	@State private var _selectedTab: String = Self._tabValue(.sources)
+	
+	private static func _tabValue(_ tab: TabEnum) -> String {
+		"tab.\(tab.rawValue)"
+	}
 	
 	@FetchRequest(
 		entity: AltSource.entity(),
@@ -24,15 +29,15 @@ struct ExtendedTabbarView: View {
 	) private var _sources: FetchedResults<AltSource>
 		
 	var body: some View {
-		TabView {
+		TabView(selection: $_selectedTab) {
 			ForEach(TabEnum.defaultTabs, id: \.hashValue) { tab in
-				Tab(tab.title, systemImage: tab.icon) {
+				Tab(tab.title, systemImage: tab.icon, value: Self._tabValue(tab)) {
 					TabEnum.view(for: tab)
 				}
 			}
 			
 			ForEach(TabEnum.customizableTabs, id: \.hashValue) { tab in
-				Tab(tab.title, systemImage: tab.icon) {
+				Tab(tab.title, systemImage: tab.icon, value: Self._tabValue(tab)) {
 					TabEnum.view(for: tab)
 				}
 				.customizationID("tab.\(tab.rawValue)")
@@ -42,14 +47,14 @@ struct ExtendedTabbarView: View {
 			}
 			
 			TabSection("Sources") {
-				Tab(.localized("All Repositories"), systemImage: "globe.desk") {
+				Tab(.localized("All Repositories"), systemImage: "globe.desk", value: "sources.all") {
 					NavigationStack {
 						SourceAppsView(object: Array(_sources), viewModel: viewModel)
 					}
 				}
 				
 				ForEach(_sources, id: \.identifier) { source in
-					Tab {
+					Tab(value: "source.\(source.objectID.uriRepresentation().absoluteString)") {
 						NavigationStack {
 							SourceAppsView(object: [source], viewModel: viewModel)
 						}
@@ -70,6 +75,9 @@ struct ExtendedTabbarView: View {
 			}
 			.defaultVisibility(.hidden, for: .tabBar)
 			.hidden(horizontalSizeClass == .compact)
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .featherShowLibrary)) { _ in
+			_selectedTab = Self._tabValue(.library)
 		}
 		.tabViewStyle(.sidebarAdaptable)
 		.tabViewCustomization($customization)

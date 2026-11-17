@@ -202,12 +202,7 @@ struct LibraryView: View {
 					allowsMultipleSelection: true,
 					onDocumentsPicked: { urls in
 						guard !urls.isEmpty else { return }
-						
-						for url in urls {
-							let id = "FeatherManualDownload_\(UUID().uuidString)"
-							let dl = downloadManager.startArchive(from: url, id: id)
-							try? downloadManager.handlePachageFile(url: url, dl: dl)
-						}
+						downloadManager.importPackageFiles(urls)
 					}
 				)
 				.ignoresSafeArea()
